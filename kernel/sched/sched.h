@@ -165,7 +165,6 @@ extern long calc_load_fold_active(struct rq *this_rq, long adjust);
 
 #ifdef CONFIG_SMP
 extern void cpu_load_update_active(struct rq *this_rq);
-extern void init_sched_groups_capacity(int cpu, struct sched_domain *sd);
 #else
 static inline void cpu_load_update_active(struct rq *this_rq) { }
 #endif
@@ -1189,7 +1188,6 @@ struct rq {
 #ifdef CONFIG_CPU_IDLE
 	/* Must be inspected within a rcu lock section */
 	struct cpuidle_state	*idle_state;
-	int			idle_state_idx;
 #endif
 };
 
@@ -1993,20 +1991,6 @@ static inline struct cpuidle_state *idle_get_state(struct rq *rq)
 	return rq->idle_state;
 }
 
-static inline void idle_set_state_idx(struct rq *rq, int idle_state_idx)
-{
-	rq->idle_state_idx = idle_state_idx;
-}
-
-static inline int idle_get_state_idx(struct rq *rq)
-{
-	WARN_ON(!rcu_read_lock_held());
-
-	if (rq->nr_running || cpu_of(rq) == raw_smp_processor_id())
-		return -1;
-
-	return rq->idle_state_idx;
-}
 #else
 static inline void idle_set_state(struct rq *rq,
 				  struct cpuidle_state *idle_state)
@@ -2018,14 +2002,6 @@ static inline struct cpuidle_state *idle_get_state(struct rq *rq)
 	return NULL;
 }
 
-static inline void idle_set_state_idx(struct rq *rq, int idle_state_idx)
-{
-}
-
-static inline int idle_get_state_idx(struct rq *rq)
-{
-	return -1;
-}
 #endif
 
 extern void schedule_idle(void);
@@ -2095,7 +2071,6 @@ static inline void add_nr_running(struct rq *rq, unsigned count)
 {
 	unsigned prev_nr = rq->nr_running;
 
-	sched_update_nr_prod(cpu_of(rq), count, true);
 	rq->nr_running = prev_nr + count;
 
 	if (prev_nr < 2 && rq->nr_running >= 2) {
@@ -2110,7 +2085,6 @@ static inline void add_nr_running(struct rq *rq, unsigned count)
 
 static inline void sub_nr_running(struct rq *rq, unsigned count)
 {
-	sched_update_nr_prod(cpu_of(rq), count, false);
 	rq->nr_running -= count;
 	/* Check if we still need preemption */
 	sched_update_tick_dependency(rq);
@@ -2933,35 +2907,6 @@ static inline int asym_cap_siblings(int cpu1, int cpu2)
 		cpumask_test_cpu(cpu2, &asym_cap_sibling_cpus));
 }
 
-static inline bool asym_cap_sibling_group_has_capacity(int dst_cpu, int margin)
-{
-	int sib1, sib2;
-	int nr_running;
-	unsigned long total_util, total_capacity;
-
-	if (cpumask_empty(&asym_cap_sibling_cpus) ||
-			cpumask_test_cpu(dst_cpu, &asym_cap_sibling_cpus))
-		return false;
-
-	sib1 = cpumask_first(&asym_cap_sibling_cpus);
-	sib2 = cpumask_last(&asym_cap_sibling_cpus);
-
-	if (!cpu_active(sib1) || cpu_isolated(sib1) ||
-		!cpu_active(sib2) || cpu_isolated(sib2))
-		return false;
-
-	nr_running = cpu_rq(sib1)->cfs.h_nr_running +
-			cpu_rq(sib2)->cfs.h_nr_running;
-
-	if (nr_running <= 2)
-		return true;
-
-	total_capacity = capacity_of(sib1) + capacity_of(sib2);
-	total_util = cpu_util(sib1) + cpu_util(sib2);
-
-	return ((total_capacity * 100) > (total_util * margin));
-}
-
 static inline int cpu_max_possible_capacity(int cpu)
 {
 	return cpu_rq(cpu)->cluster->max_possible_capacity;
@@ -3240,11 +3185,6 @@ static inline bool is_max_capacity_cpu(int cpu) { return true; }
 static inline int asym_cap_siblings(int cpu1, int cpu2) { return 0; }
 
 static inline bool is_asym_cap_cpu(int cpu) { return false; }
-
-static inline bool asym_cap_sibling_group_has_capacity(int dst_cpu, int margin)
-{
-	return false;
-}
 
 static inline void set_preferred_cluster(struct related_thread_group *grp) { }
 
